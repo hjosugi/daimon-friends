@@ -10,6 +10,7 @@ STATE_BUCKET="${STATE_BUCKET:-${PROJECT_ID}-daimon-friends-state}"
 AR_REPO="${AR_REPO:-cloud-run-source-deploy}"
 ML_SERVICE="${ML_SERVICE:-daimon-ml}"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${JOB}"
+TAG="$(git rev-parse --short HEAD)"
 QDRANT_URL="${QDRANT_URL:?QDRANT_URL is required}"
 SERVICE_ACCOUNT="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 EMBED_URL="$(gcloud run services describe "${ML_SERVICE}" \
@@ -55,12 +56,12 @@ gcloud builds submit \
   --project="${PROJECT_ID}" \
   --region=global \
   --config=cloudbuild.yaml \
-  --substitutions="_IMAGE=${IMAGE}"
+  --substitutions="_IMAGE=${IMAGE},_TAG=${TAG}"
 
 gcloud run jobs deploy "${JOB}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
-  --image="${IMAGE}:latest" \
+  --image="${IMAGE}:${TAG}" \
   --service-account="${SERVICE_ACCOUNT}" \
   --tasks=1 \
   --parallelism=1 \

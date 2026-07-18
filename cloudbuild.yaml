@@ -3,12 +3,12 @@ steps:
     name: gcr.io/cloud-builders/docker
     args:
       - build
-      - --tag=${_IMAGE}:${SHORT_SHA}
+      - --tag=${_IMAGE}:${_TAG}
       - --tag=${_IMAGE}:latest
       - .
 
 images:
-  - ${_IMAGE}:${SHORT_SHA}
+  - ${_IMAGE}:${_TAG}
   - ${_IMAGE}:latest
 
 options:
@@ -17,3 +17,4 @@ options:
 
 substitutions:
   _IMAGE: asia-northeast1-docker.pkg.dev/qualified-cedar-241514/cloud-run-source-deploy/daimon-friends
+  _TAG: manual
