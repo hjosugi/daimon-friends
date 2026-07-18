@@ -344,6 +344,72 @@ func (s *Store) RecordConversation(
 	return err
 }
 
+func (s *Store) RecordAction(
+	ctx context.Context,
+	id, kind, targetID, content, result string,
+	createdAt time.Time,
+) error {
+	if id == "" || kind == "" {
+		return fmt.Errorf("action id and kind are required")
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO actions(id,kind,target_id,content,result,created_at)
+		 VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET result=excluded.result`,
+		id, kind, targetID, content, result, createdAt.Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *Store) HasAction(ctx context.Context, id string) (bool, error) {
+	if id == "" {
+		return false, fmt.Errorf("action id is required")
+	}
+	var exists bool
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT EXISTS(SELECT 1 FROM actions WHERE id=?)`,
+		id,
+	).Scan(&exists)
+	return exists, err
+}
+
+func (s *Store) ObserveRelationship(
+	ctx context.Context,
+	subjectID string,
+	familiarityDelta, trustDelta, affinityDelta float64,
+	notes string,
+	observedAt time.Time,
+) error {
+	if subjectID == "" {
+		return fmt.Errorf("relationship subject id is required")
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO relationships(
+			subject_id,familiarity,trust,affinity,notes,last_interaction_at
+		 ) VALUES(?,max(0,?),max(0,?),max(0,?),?,?)
+		 ON CONFLICT(subject_id) DO UPDATE SET
+			familiarity=min(1,max(0,relationships.familiarity+excluded.familiarity)),
+			trust=min(1,max(0,relationships.trust+excluded.trust)),
+			affinity=min(1,max(0,relationships.affinity+excluded.affinity)),
+			notes=CASE
+				WHEN excluded.notes='' THEN relationships.notes
+				ELSE excluded.notes
+			END,
+			last_interaction_at=excluded.last_interaction_at`,
+		subjectID,
+		clampSigned(familiarityDelta),
+		clampSigned(trustDelta),
+		clampSigned(affinityDelta),
+		notes,
+		observedAt.Format(time.RFC3339Nano))
+	return err
+}
+
 func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
 	snapshot := Snapshot{Friend: s.friend}
 	if err := s.db.QueryRowContext(ctx,

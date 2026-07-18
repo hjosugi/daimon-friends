@@ -1,0 +1,19 @@
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=${_IMAGE}:${SHORT_SHA}
+      - --tag=${_IMAGE}:latest
+      - .
+
+images:
+  - ${_IMAGE}:${SHORT_SHA}
+  - ${_IMAGE}:latest
+
+options:
+  machineType: E2_MEDIUM
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _IMAGE: asia-northeast1-docker.pkg.dev/qualified-cedar-241514/cloud-run-source-deploy/daimon-friends

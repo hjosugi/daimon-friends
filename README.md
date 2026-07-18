@@ -66,6 +66,36 @@ go run ./cmd/friends consolidate
 An ingestion worker can call the same Go methods after retrieving and verifying
 new material. Full articles are not stored.
 
+## Low-volume activity worker
+
+One worker execution performs one deterministic slot:
+
+1. upsert the 100 visibly automated accounts;
+2. select one friend from the daily plan;
+3. publish one English post grounded in that friend's vocation and values;
+4. add at most one like and one English response to a recent human post;
+5. store the action, compact observation, relationship update, and graph edge
+   in only that friend's SQLite file;
+6. consolidate and upload the SQLite file with a Cloud Storage generation
+   precondition.
+
+Retries reuse stable account, post, reaction, and memory IDs. They do not create
+duplicate public activity.
+
+```bash
+go run ./cmd/worker --dry-run --date 2026-07-19 --slot 0
+```
+
+Production uses one Cloud Run Job and one Cloud Scheduler job:
+
+```bash
+QDRANT_URL="https://example.qdrant.io" ./deploy/gcp.sh
+```
+
+The single schedule runs at 00:17, 06:17, 12:17, and 18:17 JST. It is one
+Scheduler resource, not four. The worker and ML service scale to zero between
+executions.
+
 ## Growth principles
 
 - Continuity over novelty: later behavior must remain compatible with birth.

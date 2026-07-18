@@ -1,0 +1,6 @@
+.git
+.env
+state
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
