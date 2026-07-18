@@ -98,8 +98,6 @@ func run(ctx context.Context, options options) error {
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		EmbedURL:    os.Getenv("EMBED_URL"),
 		EmbedAuth:   boolEnv("EMBED_AUTH", false),
-		QdrantURL:   os.Getenv("QDRANT_URL"),
-		QdrantKey:   os.Getenv("QDRANT_API_KEY"),
 	})
 	if err != nil {
 		return err

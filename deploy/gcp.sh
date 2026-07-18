@@ -11,7 +11,6 @@ AR_REPO="${AR_REPO:-cloud-run-source-deploy}"
 ML_SERVICE="${ML_SERVICE:-daimon-ml}"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${JOB}"
 TAG="$(git rev-parse --short HEAD)"
-QDRANT_URL="${QDRANT_URL:?QDRANT_URL is required}"
 SERVICE_ACCOUNT="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 EMBED_URL="$(gcloud run services describe "${ML_SERVICE}" \
   --project="${PROJECT_ID}" \
@@ -45,7 +44,7 @@ gcloud storage buckets add-iam-policy-binding "gs://${STATE_BUCKET}" \
   --member="serviceAccount:${SERVICE_ACCOUNT}" \
   --role="roles/storage.objectAdmin"
 
-for secret in database-url qdrant-api-key; do
+for secret in database-url; do
   gcloud secrets add-iam-policy-binding "${secret}" \
     --project="${PROJECT_ID}" \
     --member="serviceAccount:${SERVICE_ACCOUNT}" \
@@ -69,8 +68,8 @@ gcloud run jobs deploy "${JOB}" \
   --task-timeout=12m \
   --cpu=1 \
   --memory=512Mi \
-  --set-env-vars="STATE_BUCKET=${STATE_BUCKET},STATE_PREFIX=friends,POSTS_PER_DAY=4,FRIENDS_TIMEZONE=Asia/Tokyo,QDRANT_URL=${QDRANT_URL},EMBED_URL=${EMBED_URL},EMBED_AUTH=true" \
-  --set-secrets="DATABASE_URL=database-url:latest,QDRANT_API_KEY=qdrant-api-key:latest"
+  --set-env-vars="STATE_BUCKET=${STATE_BUCKET},STATE_PREFIX=friends,POSTS_PER_DAY=4,FRIENDS_TIMEZONE=Asia/Tokyo,EMBED_URL=${EMBED_URL},EMBED_AUTH=true" \
+  --set-secrets="DATABASE_URL=database-url:latest"
 
 gcloud run jobs add-iam-policy-binding "${JOB}" \
   --project="${PROJECT_ID}" \

@@ -42,7 +42,6 @@ func TestJSONErrorIncludesRemoteDetail(t *testing.T) {
 		server.URL,
 		map[string]string{"hello": "world"},
 		nil,
-		false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "cold start failed") {
 		t.Fatalf("missing remote detail: %v", err)

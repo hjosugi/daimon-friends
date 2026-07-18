@@ -1,5 +1,5 @@
 // Package daimon integrates friends with Daimon's PostgreSQL system of record
-// and rebuildable Qdrant index.
+// and its compact, rebuildable semantic index.
 package daimon
 
 import (
@@ -29,33 +29,31 @@ type Config struct {
 	DatabaseURL string
 	EmbedURL    string
 	EmbedAuth   bool
-	QdrantURL   string
-	QdrantKey   string
 }
 
 type Client struct {
 	pool       *pgxpool.Pool
 	embedURL   string
 	embedToken *identityTokenSource
-	qdrantURL  string
-	qdrantKey  string
 	httpClient *http.Client
 }
 
 func New(ctx context.Context, config Config) (*Client, error) {
-	if config.DatabaseURL == "" || config.EmbedURL == "" || config.QdrantURL == "" {
-		return nil, fmt.Errorf("database, embedding, and qdrant URLs are required")
+	if config.DatabaseURL == "" || config.EmbedURL == "" {
+		return nil, fmt.Errorf("database and embedding URLs are required")
 	}
 	pool, err := pgxpool.New(ctx, config.DatabaseURL)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureVectorStore(ctx, pool); err != nil {
+		pool.Close()
 		return nil, err
 	}
 	return &Client{
 		pool:       pool,
 		embedURL:   strings.TrimRight(config.EmbedURL, "/"),
 		embedToken: newIdentityTokenSource(config.EmbedURL, config.EmbedAuth),
-		qdrantURL:  strings.TrimRight(config.QdrantURL, "/"),
-		qdrantKey:  config.QdrantKey,
 		httpClient: &http.Client{Timeout: 6 * time.Minute},
 	}, nil
 }
@@ -131,10 +129,10 @@ func (c *Client) Publish(
 			return false, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := upsertPoint(ctx, tx, post, vector); err != nil {
 		return false, err
 	}
-	if err := c.upsertPoint(ctx, post, vector); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
@@ -237,7 +235,6 @@ func (c *Client) embed(ctx context.Context, text string) ([]float32, error) {
 		c.embedURL+"/embed",
 		map[string]string{"text": text},
 		&output,
-		false,
 	); err != nil {
 		return nil, err
 	}
@@ -251,38 +248,36 @@ func (c *Client) embed(ctx context.Context, text string) ([]float32, error) {
 	return output.Vector, nil
 }
 
-func (c *Client) upsertPoint(
+func upsertPoint(
 	ctx context.Context,
+	tx pgx.Tx,
 	post activity.Post,
 	vector []float32,
 ) error {
-	input := map[string]any{
-		"points": []map[string]any{{
-			"id":     post.ID,
-			"vector": vector,
-			"payload": map[string]any{
-				"post_id":    post.ID,
-				"user_id":    post.UserID,
-				"tags":       post.POVs,
-				"created_at": post.CreatedAt.Unix(),
-			},
-		}},
+	payload, err := json.Marshal(map[string]any{
+		"post_id":    post.ID,
+		"user_id":    post.UserID,
+		"tags":       post.POVs,
+		"created_at": post.CreatedAt.Unix(),
+	})
+	if err != nil {
+		return err
 	}
-	return c.doJSON(
-		ctx,
-		http.MethodPut,
-		c.qdrantURL+"/collections/posts/points",
-		input,
-		nil,
-		true,
-	)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO post_vectors(post_id, vector, payload, updated_at)
+		VALUES($1, $2, $3::jsonb, now())
+		ON CONFLICT(post_id) DO UPDATE SET
+			vector=EXCLUDED.vector,
+			payload=EXCLUDED.payload,
+			updated_at=EXCLUDED.updated_at
+	`, post.ID, vector, string(payload))
+	return err
 }
 
 func (c *Client) doJSON(
 	ctx context.Context,
 	method, url string,
 	input, output any,
-	qdrantRequest bool,
 ) error {
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -293,15 +288,12 @@ func (c *Client) doJSON(
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	if !qdrantRequest && c.embedToken != nil {
+	if c.embedToken != nil {
 		token, err := c.embedToken.Token(ctx)
 		if err != nil {
 			return fmt.Errorf("embedding identity token: %w", err)
 		}
 		request.Header.Set("Authorization", "Bearer "+token)
-	}
-	if qdrantRequest && c.qdrantKey != "" {
-		request.Header.Set("api-key", c.qdrantKey)
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
@@ -315,6 +307,26 @@ func (c *Client) doJSON(
 	}
 	if output != nil {
 		return json.NewDecoder(response.Body).Decode(output)
+	}
+	return nil
+}
+
+func ensureVectorStore(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS post_vectors (
+			post_id varchar PRIMARY KEY REFERENCES posts(id) ON DELETE CASCADE,
+			vector real[] NOT NULL,
+			payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			CONSTRAINT post_vectors_dimensions
+				CHECK (array_length(vector, 1) = 384)
+		);
+		CREATE INDEX IF NOT EXISTS ix_post_vectors_user
+			ON post_vectors ((payload->>'user_id'));
+		ALTER TABLE post_vectors ENABLE ROW LEVEL SECURITY;
+	`)
+	if err != nil {
+		return fmt.Errorf("ensure vector store: %w", err)
 	}
 	return nil
 }

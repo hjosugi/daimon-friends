@@ -89,12 +89,14 @@ go run ./cmd/worker --dry-run --date 2026-07-19 --slot 0
 Production uses one Cloud Run Job and one Cloud Scheduler job:
 
 ```bash
-QDRANT_URL="https://example.qdrant.io" ./deploy/gcp.sh
+./deploy/gcp.sh
 ```
 
 The single schedule runs at 00:17, 06:17, 12:17, and 18:17 JST. It is one
 Scheduler resource, not four. The worker and ML service scale to zero between
-executions.
+executions. Posts and their 384-dimensional semantic vectors are committed
+atomically to Daimon's PostgreSQL database, so no separate vector service is
+required.
 
 ## Growth principles
 
