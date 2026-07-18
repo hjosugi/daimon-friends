@@ -15,7 +15,7 @@ import (
 	"github.com/hjosugi/daimon-friends/internal/birth"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 type Store struct {
 	friend birth.Certificate
@@ -27,19 +27,28 @@ type Memory struct {
 	Kind           string
 	Summary        string
 	SourceID       string
+	Provenance     string
+	Confidence     float64
 	Salience       float64
 	Valence        float64
+	Novelty        float64
+	Embedding      []float32
 	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	ExpiresAt      *time.Time
 	LastRecalledAt *time.Time
 	RecallCount    int
 }
 
 type Snapshot struct {
-	Friend        birth.Certificate  `json:"friend"`
-	MemoryCount   int                `json:"memory_count"`
-	Relationships []RelationshipView `json:"relationships"`
-	Goals         []GoalView         `json:"goals"`
-	LatestMood    *MoodView          `json:"latest_mood,omitempty"`
+	Friend             birth.Certificate  `json:"friend"`
+	MemoryCount        int                `json:"memory_count"`
+	ActiveMemoryCount  int                `json:"active_memory_count"`
+	DormantMemoryCount int                `json:"dormant_memory_count"`
+	MemoryEdgeCount    int                `json:"memory_edge_count"`
+	Relationships      []RelationshipView `json:"relationships"`
+	Goals              []GoalView         `json:"goals"`
+	LatestMood         *MoodView          `json:"latest_mood,omitempty"`
 }
 
 type RelationshipView struct {
@@ -113,6 +122,55 @@ func (s *Store) migrate(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS memories_recall
 		 ON memories(salience DESC, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS memory_nodes (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL,
+			summary TEXT NOT NULL,
+			source_id TEXT NOT NULL DEFAULT '',
+			provenance TEXT NOT NULL DEFAULT '',
+			confidence REAL NOT NULL DEFAULT 0.5,
+			salience REAL NOT NULL,
+			valence REAL NOT NULL,
+			novelty REAL NOT NULL DEFAULT 0.5,
+			state TEXT NOT NULL DEFAULT 'active'
+				CHECK(state IN ('active','dormant')),
+			embedding BLOB,
+			embedding_scale REAL,
+			embedding_dims INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			expires_at TEXT,
+			last_recalled_at TEXT,
+			recall_count INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS memory_nodes_recall
+		 ON memory_nodes(state,salience DESC,updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS memory_nodes_source
+		 ON memory_nodes(source_id,kind)`,
+		`CREATE TABLE IF NOT EXISTS memory_edges (
+			from_id TEXT NOT NULL,
+			to_id TEXT NOT NULL,
+			relation TEXT NOT NULL,
+			weight REAL NOT NULL,
+			created_at TEXT NOT NULL,
+			reinforced_at TEXT NOT NULL,
+			PRIMARY KEY(from_id,to_id,relation),
+			FOREIGN KEY(from_id) REFERENCES memory_nodes(id) ON DELETE CASCADE,
+			FOREIGN KEY(to_id) REFERENCES memory_nodes(id) ON DELETE CASCADE,
+			CHECK(from_id <> to_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS memory_edges_from
+		 ON memory_edges(from_id,weight DESC)`,
+		`CREATE TABLE IF NOT EXISTS knowledge_sources (
+			id TEXT PRIMARY KEY,
+			uri TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL,
+			author TEXT NOT NULL DEFAULT '',
+			published_at TEXT,
+			retrieved_at TEXT NOT NULL,
+			trust REAL NOT NULL,
+			content_hash TEXT NOT NULL DEFAULT ''
+		)`,
 		`CREATE TABLE IF NOT EXISTS relationships (
 			subject_id TEXT PRIMARY KEY,
 			familiarity REAL NOT NULL DEFAULT 0,
@@ -160,6 +218,13 @@ func (s *Store) migrate(ctx context.Context) error {
 			result TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		)`,
+		`INSERT OR IGNORE INTO memory_nodes(
+			id,kind,summary,source_id,provenance,confidence,salience,valence,novelty,
+			state,created_at,updated_at,last_recalled_at,recall_count
+		)
+		SELECT id,kind,summary,source_id,'legacy memory',0.5,salience,valence,0.5,
+			'active',created_at,created_at,last_recalled_at,recall_count
+		FROM memories`,
 		fmt.Sprintf(`PRAGMA user_version=%d`, schemaVersion),
 	}
 	for _, statement := range statements {
@@ -216,16 +281,45 @@ func (s *Store) Remember(ctx context.Context, memory Memory) error {
 	if memory.CreatedAt.IsZero() {
 		memory.CreatedAt = time.Now().UTC()
 	}
+	if memory.UpdatedAt.IsZero() {
+		memory.UpdatedAt = memory.CreatedAt
+	}
+	if memory.Confidence == 0 {
+		memory.Confidence = 0.5
+	}
+	if memory.Novelty == 0 {
+		memory.Novelty = 0.5
+	}
+	embedding, scale := quantizeEmbedding(memory.Embedding)
+	var expiresAt any
+	if memory.ExpiresAt != nil {
+		expiresAt = memory.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO memories(
-			id,kind,summary,source_id,salience,valence,created_at,last_recalled_at,recall_count
-		) VALUES(?,?,?,?,?,?,?,NULL,0)
+		`INSERT INTO memory_nodes(
+			id,kind,summary,source_id,provenance,confidence,salience,valence,novelty,
+			state,embedding,embedding_scale,embedding_dims,created_at,updated_at,
+			expires_at,last_recalled_at,recall_count
+		) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?,NULL,0)
 		ON CONFLICT(id) DO UPDATE SET
 			summary=excluded.summary,
-			salience=max(memories.salience,excluded.salience),
-			valence=excluded.valence`,
-		memory.ID, memory.Kind, memory.Summary, memory.SourceID,
-		clamp(memory.Salience), clampSigned(memory.Valence), memory.CreatedAt.Format(time.RFC3339Nano))
+			source_id=excluded.source_id,
+			provenance=excluded.provenance,
+			confidence=max(memory_nodes.confidence,excluded.confidence),
+			salience=max(memory_nodes.salience,excluded.salience),
+			valence=excluded.valence,
+			novelty=excluded.novelty,
+			state='active',
+			embedding=coalesce(excluded.embedding,memory_nodes.embedding),
+			embedding_scale=coalesce(excluded.embedding_scale,memory_nodes.embedding_scale),
+			embedding_dims=max(memory_nodes.embedding_dims,excluded.embedding_dims),
+			updated_at=excluded.updated_at,
+			expires_at=excluded.expires_at`,
+		memory.ID, memory.Kind, memory.Summary, memory.SourceID, memory.Provenance,
+		clamp(memory.Confidence), clamp(memory.Salience), clampSigned(memory.Valence),
+		clamp(memory.Novelty), nullableBytes(embedding), nullableScale(embedding, scale),
+		len(memory.Embedding), memory.CreatedAt.Format(time.RFC3339Nano),
+		memory.UpdatedAt.Format(time.RFC3339Nano), expiresAt)
 	return err
 }
 
@@ -252,7 +346,16 @@ func (s *Store) RecordConversation(
 
 func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
 	snapshot := Snapshot{Friend: s.friend}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM memories`).Scan(&snapshot.MemoryCount); err != nil {
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*),
+			coalesce(sum(CASE WHEN state='active' THEN 1 ELSE 0 END),0),
+			coalesce(sum(CASE WHEN state='dormant' THEN 1 ELSE 0 END),0)
+		 FROM memory_nodes`).
+		Scan(&snapshot.MemoryCount, &snapshot.ActiveMemoryCount, &snapshot.DormantMemoryCount); err != nil {
+		return Snapshot{}, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM memory_edges`).
+		Scan(&snapshot.MemoryEdgeCount); err != nil {
 		return Snapshot{}, err
 	}
 

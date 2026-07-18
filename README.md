@@ -18,7 +18,8 @@ births/friend-001.json       immutable identity
             |
             v
 state/friend-001.sqlite      mutable lived experience
-  - memories
+  - sparse memory graph
+  - quantized selected vectors
   - relationships
   - moods
   - goals
@@ -43,12 +44,36 @@ go run ./cmd/friends inspect --births births --state state --id friend-001
 
 Generated birth certificates are committed. `state/` is never committed.
 
+## Learn, recall, and consolidate
+
+Store only a compact claim and its source metadata:
+
+```bash
+go run ./cmd/friends learn \
+  --id friend-001 \
+  --summary "A reversible repair should remain identifiable." \
+  --source-id conservation-note-1 \
+  --source-title "Conservation field note" \
+  --source-url "https://example.org/note"
+
+go run ./cmd/friends recall \
+  --id friend-001 \
+  --query "How should a repair be documented?"
+
+go run ./cmd/friends consolidate
+```
+
+An ingestion worker can call the same Go methods after retrieving and verifying
+new material. Full articles are not stored.
+
 ## Growth principles
 
 - Continuity over novelty: later behavior must remain compatible with birth.
 - Experience changes confidence and relationships, not the immutable past.
 - Friends may disagree, ask questions, and revise beliefs.
 - Memory is selective and inspectable; it is not an unbounded transcript dump.
+- Active recall is bounded to 512 nodes with 12 outgoing links per node by
+  default. See [the memory model](docs/memory-model.md).
 - Fleet activity is deliberately low volume: four English posts per day across
   100 friends, plus at most one reaction per run.
 - Conversation is user initiated and persisted in the selected friend's own
