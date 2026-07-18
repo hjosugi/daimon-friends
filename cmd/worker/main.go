@@ -97,6 +97,7 @@ func run(ctx context.Context, options options) error {
 	client, err := daimon.New(ctx, daimon.Config{
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		EmbedURL:    os.Getenv("EMBED_URL"),
+		EmbedAuth:   boolEnv("EMBED_AUTH", false),
 		QdrantURL:   os.Getenv("QDRANT_URL"),
 		QdrantKey:   os.Getenv("QDRANT_API_KEY"),
 	})
@@ -333,4 +334,12 @@ func envInt(key string, fallback int) int {
 		log.Fatalf("%s must be an integer", key)
 	}
 	return parsed
+}
+
+func boolEnv(key string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes"
 }

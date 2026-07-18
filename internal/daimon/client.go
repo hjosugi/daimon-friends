@@ -28,6 +28,7 @@ const vectorDimensions = 384
 type Config struct {
 	DatabaseURL string
 	EmbedURL    string
+	EmbedAuth   bool
 	QdrantURL   string
 	QdrantKey   string
 }
@@ -35,6 +36,7 @@ type Config struct {
 type Client struct {
 	pool       *pgxpool.Pool
 	embedURL   string
+	embedToken *identityTokenSource
 	qdrantURL  string
 	qdrantKey  string
 	httpClient *http.Client
@@ -51,6 +53,7 @@ func New(ctx context.Context, config Config) (*Client, error) {
 	return &Client{
 		pool:       pool,
 		embedURL:   strings.TrimRight(config.EmbedURL, "/"),
+		embedToken: newIdentityTokenSource(config.EmbedURL, config.EmbedAuth),
 		qdrantURL:  strings.TrimRight(config.QdrantURL, "/"),
 		qdrantKey:  config.QdrantKey,
 		httpClient: &http.Client{Timeout: 6 * time.Minute},
@@ -290,6 +293,13 @@ func (c *Client) doJSON(
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if !qdrantRequest && c.embedToken != nil {
+		token, err := c.embedToken.Token(ctx)
+		if err != nil {
+			return fmt.Errorf("embedding identity token: %w", err)
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 	if qdrantRequest && c.qdrantKey != "" {
 		request.Header.Set("api-key", c.qdrantKey)
 	}
