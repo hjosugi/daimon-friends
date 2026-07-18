@@ -1,0 +1,6 @@
+/bin/
+/state/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
