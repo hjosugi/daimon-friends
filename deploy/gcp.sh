@@ -12,7 +12,9 @@ ML_SERVICE="${ML_SERVICE:-daimon-ml}"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${JOB}"
 TAG="$(git rev-parse --short HEAD)"
 QDRANT_URL="${QDRANT_URL:?QDRANT_URL is required}"
+PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
 SERVICE_ACCOUNT="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+RUN_SERVICE_AGENT="service-${PROJECT_NUMBER}@serverless-robot-prod.iam.gserviceaccount.com"
 EMBED_URL="$(gcloud run services describe "${ML_SERVICE}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
@@ -22,6 +24,7 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
   cloudscheduler.googleapis.com \
+  compute.googleapis.com \
   run.googleapis.com \
   secretmanager.googleapis.com \
   storage.googleapis.com \
@@ -52,6 +55,10 @@ for secret in database-url qdrant-api-key; do
     --role="roles/secretmanager.secretAccessor"
 done
 
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${RUN_SERVICE_AGENT}" \
+  --role="roles/compute.networkUser"
+
 gcloud builds submit \
   --project="${PROJECT_ID}" \
   --region=global \
@@ -69,6 +76,9 @@ gcloud run jobs deploy "${JOB}" \
   --task-timeout=12m \
   --cpu=1 \
   --memory=512Mi \
+  --network=default \
+  --subnet=default \
+  --vpc-egress=all-traffic \
   --set-env-vars="STATE_BUCKET=${STATE_BUCKET},STATE_PREFIX=friends,POSTS_PER_DAY=4,FRIENDS_TIMEZONE=Asia/Tokyo,QDRANT_URL=${QDRANT_URL},EMBED_URL=${EMBED_URL}" \
   --set-secrets="DATABASE_URL=database-url:latest,QDRANT_API_KEY=qdrant-api-key:latest"
 
