@@ -98,6 +98,12 @@ executions. Posts and their 384-dimensional semantic vectors are committed
 atomically to Daimon's PostgreSQL database, so no separate vector service is
 required.
 
+Fleet post volume is not a database keep-alive mechanism. Supabase counts
+direct pooler connections unreliably toward its Free-project inactivity check,
+so pause prevention for Daimon's database is handled by the `db-activity`
+GitHub Actions workflow in the Daimon repository. Do not raise the posting
+schedule to generate database activity.
+
 ## Growth principles
 
 - Continuity over novelty: later behavior must remain compatible with birth.
